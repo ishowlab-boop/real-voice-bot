@@ -131,10 +131,8 @@ class Database:
     def set_validity(self, user_id: int, days: int):
         now = datetime.utcnow()
         expire_at = (now + timedelta(days=days)).isoformat()
-
         user = self.get_user(user_id)
         is_premium = 1 if (user and (user.get("credits") or 0) > 0) else 0
-
         self.update_user_fields(
             user_id,
             {
