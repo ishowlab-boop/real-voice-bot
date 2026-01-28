@@ -10,6 +10,7 @@ from config import (
     VOICES_DIR,
     REQUIRE_VALIDITY_FOR_TTS,
     MAX_TTS_CHARS,
+    DEFAULT_MODELS,  # ✅ NEW
 )
 from fish_audio import FishAudioClient
 
@@ -123,6 +124,11 @@ def register_user_handlers(bot: telebot.TeleBot, db):
 
         selected_id = user.get("selected_model")
         selected_name = get_model_name(models, selected_id) if selected_id else "Not selected"
+
+        # ✅ NEW: default voice id from admin panel (DB settings)
+        default_voice_id = db.get_setting("default_voice_id", DEFAULT_MODELS[0]["id"])
+        default_voice_name = get_model_name(models, default_voice_id)
+
         mode = (user.get("tts_speed") or "natural").strip().lower()
 
         bot.send_message(
@@ -131,6 +137,7 @@ def register_user_handlers(bot: telebot.TeleBot, db):
             f"Credits: {user.get('credits') or 0}\n"
             f"Validity: {user.get('validity_expire_at') or 'No validity'}\n"
             f"Selected model: {selected_name}\n"
+            f"Default voice: {default_voice_name}\n"
             f"Speed: {speed_to_label(mode)}\n"
             f"Voices saved: {len(voices)}",
         )
@@ -171,9 +178,10 @@ def register_user_handlers(bot: telebot.TeleBot, db):
             return
 
         model = user.get("selected_model")
+
+        # ✅ NEW: If user didn't select model, use admin-set default voice id
         if not model:
-            bot.send_message(message.chat.id, "Please select a model first.")
-            return
+            model = db.get_setting("default_voice_id", DEFAULT_MODELS[0]["id"])
 
         mode = (user.get("tts_speed") or "natural").strip().lower()
         spd = speed_to_value(mode)
