@@ -44,6 +44,16 @@ class Database:
             """
         )
 
+        # ✅ NEW: settings table (for default voice id etc.)
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+            """
+        )
+
         # Migration safety: if old DB exists without tts_speed, add it.
         try:
             cur.execute("ALTER TABLE users ADD COLUMN tts_speed TEXT")
@@ -175,3 +185,19 @@ class Database:
         cur = self.conn.cursor()
         cur.execute("SELECT user_id FROM admins WHERE user_id = ?", (user_id,))
         return cur.fetchone() is not None
+
+    # ✅ NEW: settings helpers
+    def get_setting(self, key: str, default: str = "") -> str:
+        cur = self.conn.cursor()
+        cur.execute("SELECT value FROM settings WHERE key = ?", (key,))
+        row = cur.fetchone()
+        return (row["value"] if row else default) or default
+
+    def set_setting(self, key: str, value: str):
+        cur = self.conn.cursor()
+        cur.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, value),
+        )
+        self.conn.commit()
