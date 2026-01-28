@@ -93,30 +93,24 @@ def register_admin_handlers(bot: telebot.TeleBot, db):
         section = parts[1]
 
         # -----------------------
-        # CREDITS (manual user id)
+        # MAIN MENU
+        # -----------------------
+        if section == "menu":
+            return bot.send_message(callback.message.chat.id, "⚙️ Admin Panel", reply_markup=build_admin_menu())
+
+        # -----------------------
+        # CREDITS (User ID)
         # -----------------------
         if section == "credits" and len(parts) == 2:
-            kb = types.InlineKeyboardMarkup()
-            kb.add(types.InlineKeyboardButton("Enter User ID", callback_data="admin:credits:manual"))
-            kb.add(types.InlineKeyboardButton("⬅ Back", callback_data="admin:menu"))
-            return bot.send_message(callback.message.chat.id, "Credits: choose method", reply_markup=kb)
-
-        if section == "credits" and len(parts) > 2 and parts[2] == "manual":
             admin_steps[uid] = {"action": "credits_pick_user"}
-            return bot.send_message(callback.message.chat.id, "Send target User ID (numeric):")
+            return bot.send_message(callback.message.chat.id, "Send target User ID:")
 
         # -----------------------
-        # VALIDITY (manual user id)
+        # VALIDITY (User ID)
         # -----------------------
         if section == "validity" and len(parts) == 2:
-            kb = types.InlineKeyboardMarkup()
-            kb.add(types.InlineKeyboardButton("Enter User ID", callback_data="admin:validity:manual"))
-            kb.add(types.InlineKeyboardButton("⬅ Back", callback_data="admin:menu"))
-            return bot.send_message(callback.message.chat.id, "Validity: choose method", reply_markup=kb)
-
-        if section == "validity" and len(parts) > 2 and parts[2] == "manual":
             admin_steps[uid] = {"action": "validity_pick_user"}
-            return bot.send_message(callback.message.chat.id, "Send target User ID (numeric):")
+            return bot.send_message(callback.message.chat.id, "Send target User ID:")
 
         # -----------------------
         # LIST USERS
@@ -127,7 +121,7 @@ def register_admin_handlers(bot: telebot.TeleBot, db):
             return bot.send_message(callback.message.chat.id, text or "No users")
 
         # -----------------------
-        # LIST PREMIUM (pretty date)
+        # LIST PREMIUM (Start/End pretty)
         # -----------------------
         if section == "list_premium":
             users = db.list_premium_users()
@@ -162,7 +156,11 @@ def register_admin_handlers(bot: telebot.TeleBot, db):
         if section == "voices" and len(parts) == 2:
             models = _get_models_from_db(db)
             current_default = db.get_setting("default_voice_id", DEFAULT_MODELS[0]["id"])
-            text = f"🎛️ Default Voice Settings\n\nCurrent default voice id:\n{current_default}\n\nSelect a voice:"
+            text = (
+                f"🎛️ Default Voice Settings\n\n"
+                f"Current default voice id:\n{current_default}\n\n"
+                f"Select a voice to change ID:"
+            )
             return bot.send_message(callback.message.chat.id, text, reply_markup=build_voices_keyboard(models))
 
         if section == "voices" and len(parts) > 2 and parts[2] == "edit":
@@ -170,11 +168,14 @@ def register_admin_handlers(bot: telebot.TeleBot, db):
             models = _get_models_from_db(db)
             if idx < 0 or idx >= len(models):
                 return bot.send_message(callback.message.chat.id, "❌ Invalid voice")
+
             v = models[idx]
             admin_steps[uid] = {"action": "voice_edit_apply", "index": idx}
             return bot.send_message(
                 callback.message.chat.id,
-                f"🎙 Voice: {v.get('name')}\nCurrent voice id:\n{v.get('id')}\n\nSend new Voice ID:"
+                f"🎙 Voice: {v.get('name')}\n"
+                f"Current voice id:\n{v.get('id')}\n\n"
+                f"Send new Voice ID:"
             )
 
         if section == "voices" and len(parts) > 2 and parts[2] == "add":
@@ -209,24 +210,39 @@ def register_admin_handlers(bot: telebot.TeleBot, db):
         action = step.get("action")
 
         try:
-            # credits user id -> show add/remove buttons
+            # -------- Credits flow --------
             if action == "credits_pick_user":
                 user_id = parse_int(msg.text)
-                kb = types.InlineKeyboardMarkup()
-                kb.add(types.InlineKeyboardButton("Add Credits", callback_data=f"admin:credits:add:{user_id}"))
-                kb.add(types.InlineKeyboardButton("Remove Credits", callback_data=f"admin:credits:remove:{user_id}"))
-                kb.add(types.InlineKeyboardButton("⬅ Back", callback_data="admin:menu"))
-                return bot.send_message(msg.chat.id, f"User {user_id}\nChoose action:", reply_markup=kb)
+                admin_steps[uid] = {"action": "credits_pick_amount", "target": user_id}
+                return bot.send_message(msg.chat.id, f"User {user_id}\nSend credits amount (e.g. 50):")
 
-            # validity user id -> show set/remove buttons
+            if action == "credits_pick_amount":
+                amount = parse_int(msg.text)
+                target = int(step.get("target"))
+                db.ensure_user(target, None)
+                db.add_credits(target, amount)
+                return bot.send_message(msg.chat.id, f"✅ Added {amount} credits to {target}")
+
+            # -------- Validity flow --------
             if action == "validity_pick_user":
                 user_id = parse_int(msg.text)
-                kb = types.InlineKeyboardMarkup()
-                kb.add(types.InlineKeyboardButton("Set Validity", callback_data=f"admin:validity:set:{user_id}"))
-                kb.add(types.InlineKeyboardButton("Remove Validity", callback_data=f"admin:validity:remove:{user_id}"))
-                kb.add(types.InlineKeyboardButton("⬅ Back", callback_data="admin:menu"))
-                return bot.send_message(msg.chat.id, f"User {user_id}\nChoose action:", reply_markup=kb)
+                admin_steps[uid] = {"action": "validity_pick_days", "target": user_id}
+                return bot.send_message(msg.chat.id, f"User {user_id}\nSend validity days (e.g. 30):")
 
+            if action == "validity_pick_days":
+                days = parse_int(msg.text)
+                target = int(step.get("target"))
+                db.ensure_user(target, None)
+                db.set_validity(target, days)
+                u = db.get_user(target) or {}
+                return bot.send_message(
+                    msg.chat.id,
+                    f"✅ Validity set for {target}\n"
+                    f"Start: {pretty_date(u.get('validity_start_at'))}\n"
+                    f"End: {pretty_date(u.get('validity_expire_at'))}"
+                )
+
+            # -------- Default voice --------
             if action == "set_default_voice":
                 voice_id = (msg.text or "").strip()
                 if len(voice_id) < 10:
@@ -234,89 +250,8 @@ def register_admin_handlers(bot: telebot.TeleBot, db):
                 db.set_setting("default_voice_id", voice_id)
                 return bot.send_message(msg.chat.id, f"✅ Default voice updated:\n{voice_id}")
 
+            # -------- Add voice --------
             if action == "voice_add":
                 raw = (msg.text or "").strip()
                 if "|" not in raw:
-                    return bot.send_message(msg.chat.id, "❌ Use format: <voice_id> | <voice_name>")
-                vid, vname = [x.strip() for x in raw.split("|", 1)]
-                if len(vid) < 10:
-                    return bot.send_message(msg.chat.id, "❌ Invalid voice id")
-                models = _get_models_from_db(db)
-                models.append({"id": vid, "name": vname or vid})
-                _set_models_to_db(db, models)
-                return bot.send_message(msg.chat.id, "✅ Voice added. Open Manage Voices to verify.")
-
-            if action == "voice_edit_apply":
-                new_id = (msg.text or "").strip()
-                if len(new_id) < 10:
-                    return bot.send_message(msg.chat.id, "❌ Invalid Voice ID")
-                idx = int(step.get("index"))
-                models = _get_models_from_db(db)
-                if idx < 0 or idx >= len(models):
-                    return bot.send_message(msg.chat.id, "❌ Invalid voice index")
-                models[idx]["id"] = new_id
-                _set_models_to_db(db, models)
-                return bot.send_message(msg.chat.id, f"✅ Voice updated:\n{models[idx].get('name')}\n{new_id}")
-
-            # broadcast
-            if action == "broadcast":
-                import time
-                users = db.list_users(limit=100000)
-                sent = 0
-                failed = 0
-                for u in users:
-                    uid2 = u.get("id")
-                    if not uid2:
-                        continue
-                    try:
-                        bot.send_message(uid2, msg.text)
-                        sent += 1
-                        time.sleep(0.05)
-                    except Exception:
-                        failed += 1
-                        time.sleep(0.2)
-                return bot.send_message(msg.chat.id, f"📣 Broadcast finished.\n✅ Sent: {sent}\n❌ Failed: {failed}")
-
-        except Exception as e:
-            bot.send_message(msg.chat.id, f"❌ Error: {e}")
-
-
-# -----------------------
-# CALLBACKS FOR CREDIT/VALIDITY ACTIONS
-# (must be after step_handler definition in file, but same scope)
-# -----------------------
-def _register_credit_validity_callbacks(bot: telebot.TeleBot, db, admin_steps: Dict[int, Dict]):
-
-    @bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("admin:credits:"))
-    def credits_cb(callback):
-        parts = callback.data.split(":")
-        if len(parts) < 4:
-            return
-        action = parts[2]  # add/remove
-        user_id = int(parts[3])
-        admin_steps[callback.from_user.id] = {"action": action, "target": user_id}
-        bot.answer_callback_query(callback.id)
-        bot.send_message(callback.message.chat.id, "Send credit amount:")
-
-    @bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("admin:validity:"))
-    def validity_cb(callback):
-        parts = callback.data.split(":")
-        if len(parts) < 4:
-            return
-        action = parts[2]  # set/remove
-        user_id = int(parts[3])
-
-        bot.answer_callback_query(callback.id)
-
-        if action == "remove":
-            db.ensure_user(user_id, None)
-            db.remove_validity(user_id)
-            return bot.send_message(callback.message.chat.id, f"✔ Removed validity for {user_id}")
-
-        if action == "set":
-            admin_steps[callback.from_user.id] = {"action": "set_validity_days", "target": user_id}
-            return bot.send_message(callback.message.chat.id, "Send number of days:")
-
-
-# NOTE: call this inside register_admin_handlers right after admin_steps created
-# We call it at end of register_admin_handlers function:
+                    return bot.send
