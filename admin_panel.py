@@ -93,29 +93,27 @@ def register_admin_handlers(bot: telebot.TeleBot, db):
         section = parts[1]
 
         # -----------------------
-        # CREDITS
+        # MENU
+        # -----------------------
+        if section == "menu":
+            return bot.send_message(callback.message.chat.id, "⚙️ Admin Panel", reply_markup=build_admin_menu())
+
+        # -----------------------
+        # CREDITS -> ask user id
         # -----------------------
         if section == "credits" and len(parts) == 2:
             admin_steps[uid] = {"action": "credits_pick_user"}
             return bot.send_message(callback.message.chat.id, "Send User ID for credits:")
 
         # -----------------------
-        # VALIDITY
+        # VALIDITY -> ask user id
         # -----------------------
         if section == "validity" and len(parts) == 2:
             admin_steps[uid] = {"action": "validity_pick_user"}
             return bot.send_message(callback.message.chat.id, "Send User ID for validity:")
 
         # -----------------------
-        # LIST USERS
-        # -----------------------
-        if section == "list_users":
-            users = db.list_users()
-            text = "\n".join([f"{u['id']} @{u.get('username')} | credits={u.get('credits')}" for u in users])
-            return bot.send_message(callback.message.chat.id, text or "No users")
-
-        # -----------------------
-        # LIST PREMIUM
+        # PREMIUM LIST (pretty start/end)
         # -----------------------
         if section == "list_premium":
             users = db.list_premium_users()
@@ -129,20 +127,6 @@ def register_admin_handlers(bot: telebot.TeleBot, db):
                     f"----------------------"
                 )
             return bot.send_message(callback.message.chat.id, "\n".join(lines) or "No premium users")
-
-        # -----------------------
-        # BROADCAST
-        # -----------------------
-        if section == "broadcast":
-            admin_steps[uid] = {"action": "broadcast"}
-            return bot.send_message(callback.message.chat.id, "Send broadcast message:")
-
-        # -----------------------
-        # DEFAULT VOICE ID
-        # -----------------------
-        if section == "default_voice":
-            admin_steps[uid] = {"action": "set_default_voice"}
-            return bot.send_message(callback.message.chat.id, "Send new Default Voice ID:")
 
         # -----------------------
         # VOICES
@@ -192,32 +176,26 @@ def register_admin_handlers(bot: telebot.TeleBot, db):
     @bot.message_handler(func=lambda m: m.from_user.id in admin_steps)
     def step_handler(msg):
         uid = msg.from_user.id
-        step = admin_steps.pop(uid, None)
+        step = admin_steps.get(uid)
         if not step:
             return
 
         action = step.get("action")
 
         try:
-            # -----------------------
-            # CREDITS FLOW
-            # -----------------------
+            # -------- credits: pick user id -> show add/remove buttons
             if action == "credits_pick_user":
                 user_id = parse_int(msg.text)
                 db.ensure_user(user_id, None)
-                admin_steps[uid] = {"action": "credits_amount", "target": user_id}
-                return bot.send_message(msg.chat.id, f"User {user_id}\nSend credits amount (example: 50):")
+                admin_steps.pop(uid, None)
 
-            if action == "credits_amount":
-                amount = parse_int(msg.text)
-                target = int(step.get("target"))
-                db.ensure_user(target, None)
-                db.add_credits(target, amount)
-                return bot.send_message(msg.chat.id, f"✅ Added {amount} credits to {target}")
+                kb = types.InlineKeyboardMarkup()
+                kb.add(types.InlineKeyboardButton("➕ Add Credits", callback_data=f"admin:credits_add:{user_id}"))
+                kb.add(types.InlineKeyboardButton("➖ Remove Credits", callback_data=f"admin:credits_remove:{user_id}"))
+                kb.add(types.InlineKeyboardButton("⬅ Back", callback_data="admin:menu"))
+                return bot.send_message(msg.chat.id, f"User {user_id}\nChoose:", reply_markup=kb)
 
-            # -----------------------
-            # VALIDITY FLOW
-            # -----------------------
+            # -------- validity: pick user id -> ask days
             if action == "validity_pick_user":
                 user_id = parse_int(msg.text)
                 db.ensure_user(user_id, None)
@@ -227,28 +205,19 @@ def register_admin_handlers(bot: telebot.TeleBot, db):
             if action == "validity_days":
                 days = parse_int(msg.text)
                 target = int(step.get("target"))
+                admin_steps.pop(uid, None)
                 db.ensure_user(target, None)
                 db.set_validity(target, days)
                 return bot.send_message(msg.chat.id, f"✅ Validity set: {days} days for {target}")
 
-            # -----------------------
-            # DEFAULT VOICE
-            # -----------------------
-            if action == "set_default_voice":
-                voice_id = (msg.text or "").strip()
-                if len(voice_id) < 10:
-                    return bot.send_message(msg.chat.id, "❌ Invalid Voice ID")
-                db.set_setting("default_voice_id", voice_id)
-                return bot.send_message(msg.chat.id, f"✅ Default voice updated:\n{voice_id}")
-
-            # -----------------------
-            # VOICE EDIT
-            # -----------------------
+            # -------- voice edit
             if action == "voice_edit_apply":
                 new_id = (msg.text or "").strip()
                 if len(new_id) < 10:
                     return bot.send_message(msg.chat.id, "❌ Invalid Voice ID")
                 idx = int(step.get("index"))
+                admin_steps.pop(uid, None)
+
                 models = _get_models_from_db(db)
                 if idx < 0 or idx >= len(models):
                     return bot.send_message(msg.chat.id, "❌ Invalid voice index")
@@ -257,9 +226,7 @@ def register_admin_handlers(bot: telebot.TeleBot, db):
                 _set_models_to_db(db, models)
                 return bot.send_message(msg.chat.id, f"✅ Voice updated:\n{models[idx].get('name')}\n{new_id}")
 
-            # -----------------------
-            # VOICE ADD
-            # -----------------------
+            # -------- voice add
             if action == "voice_add":
                 raw = (msg.text or "").strip()
                 if "|" not in raw:
@@ -267,32 +234,57 @@ def register_admin_handlers(bot: telebot.TeleBot, db):
                 vid, vname = [x.strip() for x in raw.split("|", 1)]
                 if len(vid) < 10:
                     return bot.send_message(msg.chat.id, "❌ Invalid voice id")
+                admin_steps.pop(uid, None)
 
                 models = _get_models_from_db(db)
                 models.append({"id": vid, "name": vname or vid})
                 _set_models_to_db(db, models)
                 return bot.send_message(msg.chat.id, "✅ Voice added successfully!")
 
-            # -----------------------
-            # BROADCAST
-            # -----------------------
-            if action == "broadcast":
-                import time
-                users = db.list_users(limit=100000)
-                sent = 0
-                failed = 0
-                for u in users:
-                    uid2 = u.get("id")
-                    if not uid2:
-                        continue
-                    try:
-                        bot.send_message(uid2, msg.text)
-                        sent += 1
-                        time.sleep(0.05)
-                    except Exception:
-                        failed += 1
-                        time.sleep(0.2)
-                return bot.send_message(msg.chat.id, f"📣 Broadcast finished.\n✅ Sent: {sent}\n❌ Failed: {failed}")
+        except Exception as e:
+            admin_steps.pop(uid, None)
+            bot.send_message(msg.chat.id, f"❌ Error: {e}")
+
+    # -----------------------
+    # CALLBACKS: credits add/remove amount
+    # -----------------------
+    @bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("admin:credits_add:"))
+    def credits_add_cb(callback):
+        if not ensure_admin(callback.from_user.id):
+            return bot.answer_callback_query(callback.id)
+        user_id = int(callback.data.split(":")[2])
+        admin_steps[callback.from_user.id] = {"action": "credits_add_amount", "target": user_id}
+        bot.answer_callback_query(callback.id)
+        bot.send_message(callback.message.chat.id, f"Send amount to ADD for {user_id}:")
+
+    @bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("admin:credits_remove:"))
+    def credits_remove_cb(callback):
+        if not ensure_admin(callback.from_user.id):
+            return bot.answer_callback_query(callback.id)
+        user_id = int(callback.data.split(":")[2])
+        admin_steps[callback.from_user.id] = {"action": "credits_remove_amount", "target": user_id}
+        bot.answer_callback_query(callback.id)
+        bot.send_message(callback.message.chat.id, f"Send amount to REMOVE for {user_id}:")
+
+    @bot.message_handler(func=lambda m: m.from_user.id in admin_steps and admin_steps[m.from_user.id].get("action") in ("credits_add_amount", "credits_remove_amount"))
+    def credits_amount_handler(msg):
+        uid = msg.from_user.id
+        step = admin_steps.pop(uid, None)
+        if not step:
+            return
+
+        try:
+            amount = parse_int(msg.text)
+            target = int(step.get("target"))
+            db.ensure_user(target, None)
+
+            if step.get("action") == "credits_add_amount":
+                db.add_credits(target, amount)
+                return bot.send_message(msg.chat.id, f"✅ Added {amount} credits to {target}")
+
+            if step.get("action") == "credits_remove_amount":
+                db.remove_credits(target, amount)
+                return bot.send_message(msg.chat.id, f"✅ Removed {amount} credits from {target}")
 
         except Exception as e:
             bot.send_message(msg.chat.id, f"❌ Error: {e}")
