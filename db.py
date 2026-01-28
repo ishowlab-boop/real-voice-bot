@@ -19,6 +19,7 @@ class Database:
                 is_premium INTEGER DEFAULT 0,
                 credits INTEGER DEFAULT 0,
                 validity_expire_at TEXT,
+                validity_start_at TEXT,
                 selected_model TEXT,
                 tts_speed TEXT,
                 created_at TEXT,
@@ -43,8 +44,6 @@ class Database:
             )
             """
         )
-
-        # ✅ NEW: settings table (for default voice id etc.)
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS settings (
@@ -54,14 +53,36 @@ class Database:
             """
         )
 
-        # Migration safety: if old DB exists without tts_speed, add it.
+        # Migration safety
         try:
             cur.execute("ALTER TABLE users ADD COLUMN tts_speed TEXT")
         except Exception:
             pass
 
+        try:
+            cur.execute("ALTER TABLE users ADD COLUMN validity_start_at TEXT")
+        except Exception:
+            pass
+
         self.conn.commit()
 
+    # -------------------
+    # SETTINGS
+    # -------------------
+    def set_setting(self, key: str, value: str):
+        cur = self.conn.cursor()
+        cur.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
+        self.conn.commit()
+
+    def get_setting(self, key: str, default: str = "") -> str:
+        cur = self.conn.cursor()
+        cur.execute("SELECT value FROM settings WHERE key = ?", (key,))
+        row = cur.fetchone()
+        return (row[0] if row else default) or default
+
+    # -------------------
+    # USERS
+    # -------------------
     def ensure_user(self, user_id: int, username: Optional[str]):
         cur = self.conn.cursor()
         cur.execute("SELECT id FROM users WHERE id = ?", (user_id,))
@@ -108,13 +129,26 @@ class Database:
         self.update_user_fields(user_id, {"credits": new_credits, "is_premium": is_premium})
 
     def set_validity(self, user_id: int, days: int):
-        expire_at = (datetime.utcnow() + timedelta(days=days)).isoformat()
+        now = datetime.utcnow()
+        expire_at = (now + timedelta(days=days)).isoformat()
+
         user = self.get_user(user_id)
         is_premium = 1 if (user and (user.get("credits") or 0) > 0) else 0
-        self.update_user_fields(user_id, {"validity_expire_at": expire_at, "is_premium": is_premium})
+
+        self.update_user_fields(
+            user_id,
+            {
+                "validity_start_at": now.isoformat(),
+                "validity_expire_at": expire_at,
+                "is_premium": is_premium,
+            },
+        )
 
     def remove_validity(self, user_id: int):
-        self.update_user_fields(user_id, {"validity_expire_at": None, "is_premium": 0})
+        self.update_user_fields(
+            user_id,
+            {"validity_start_at": None, "validity_expire_at": None, "is_premium": 0},
+        )
 
     def is_valid(self, user_id: int) -> bool:
         user = self.get_user(user_id)
@@ -134,18 +168,15 @@ class Database:
         rows = cur.fetchall()
         return [dict(r) for r in rows]
 
-    def list_all_users(self) -> List[Dict[str, Any]]:
-        cur = self.conn.cursor()
-        cur.execute("SELECT * FROM users ORDER BY created_at DESC")
-        rows = cur.fetchall()
-        return [dict(r) for r in rows]
-
     def list_premium_users(self, limit: int = 100) -> List[Dict[str, Any]]:
         cur = self.conn.cursor()
         cur.execute("SELECT * FROM users WHERE is_premium = 1 ORDER BY updated_at DESC LIMIT ?", (limit,))
         rows = cur.fetchall()
         return [dict(r) for r in rows]
 
+    # -------------------
+    # VOICES
+    # -------------------
     def store_voice(self, user_id: int, file_path: str):
         cur = self.conn.cursor()
         cur.execute(
@@ -165,6 +196,9 @@ class Database:
         cur.execute("DELETE FROM voices WHERE user_id = ?", (user_id,))
         self.conn.commit()
 
+    # -------------------
+    # ADMINS
+    # -------------------
     def get_admins(self) -> List[int]:
         cur = self.conn.cursor()
         cur.execute("SELECT user_id FROM admins")
@@ -185,19 +219,3 @@ class Database:
         cur = self.conn.cursor()
         cur.execute("SELECT user_id FROM admins WHERE user_id = ?", (user_id,))
         return cur.fetchone() is not None
-
-    # ✅ NEW: settings helpers
-    def get_setting(self, key: str, default: str = "") -> str:
-        cur = self.conn.cursor()
-        cur.execute("SELECT value FROM settings WHERE key = ?", (key,))
-        row = cur.fetchone()
-        return (row["value"] if row else default) or default
-
-    def set_setting(self, key: str, value: str):
-        cur = self.conn.cursor()
-        cur.execute(
-            "INSERT INTO settings (key, value) VALUES (?, ?) "
-            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (key, value),
-        )
-        self.conn.commit()
