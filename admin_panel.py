@@ -11,6 +11,10 @@ def build_admin_menu():
     kb.add(types.InlineKeyboardButton("List Users", callback_data="admin:list_users"))
     kb.add(types.InlineKeyboardButton("List Premium Users", callback_data="admin:list_premium"))
     kb.add(types.InlineKeyboardButton("Broadcast", callback_data="admin:broadcast"))
+
+    # ✅ NEW: global default voice id set from admin panel
+    kb.add(types.InlineKeyboardButton("Set Default Voice ID", callback_data="admin:default_voice"))
+
     kb.add(types.InlineKeyboardButton("Download Data", callback_data="admin:download"))
     kb.add(types.InlineKeyboardButton("Manage Admins", callback_data="admin:admins"))
     return kb
@@ -58,6 +62,13 @@ def register_admin_handlers(bot: telebot.TeleBot, db):
             )
 
         # -----------------------
+        # ✅ NEW: SET DEFAULT VOICE (GLOBAL)
+        # -----------------------
+        if section == "default_voice":
+            admin_steps[uid] = {"action": "set_default_voice", "target": 0}
+            return bot.send_message(callback.message.chat.id, "Send new Default Voice ID:")
+
+        # -----------------------
         # CREDITS → SHOW USERS
         # -----------------------
         if section == "credits" and len(parts) == 2:
@@ -76,7 +87,7 @@ def register_admin_handlers(bot: telebot.TeleBot, db):
         # -----------------------
         # SELECTED USER FOR CREDITS
         # -----------------------
-        if section == "credits" and parts[2] == "user":
+        if section == "credits" and len(parts) > 2 and parts[2] == "user":
             user_id = int(parts[3])
             kb = types.InlineKeyboardMarkup()
             kb.add(types.InlineKeyboardButton("Add Credits", callback_data=f"admin:credits:add:{user_id}"))
@@ -87,7 +98,7 @@ def register_admin_handlers(bot: telebot.TeleBot, db):
         # -----------------------
         # SELECTED USER FOR VALIDITY
         # -----------------------
-        if section == "validity" and parts[2] == "user":
+        if section == "validity" and len(parts) > 2 and parts[2] == "user":
             user_id = int(parts[3])
             kb = types.InlineKeyboardMarkup()
             kb.add(types.InlineKeyboardButton("Set Validity", callback_data=f"admin:validity:set:{user_id}"))
@@ -98,18 +109,18 @@ def register_admin_handlers(bot: telebot.TeleBot, db):
         # -----------------------
         # CREDIT AMOUNT INPUT
         # -----------------------
-        if section == "credits" and parts[2] in ("add", "remove"):
+        if section == "credits" and len(parts) > 2 and parts[2] in ("add", "remove"):
             admin_steps[uid] = {"action": parts[2], "target": int(parts[3])}
             return bot.send_message(callback.message.chat.id, "Send credit amount:")
 
         # -----------------------
         # VALIDITY INPUT
         # -----------------------
-        if section == "validity" and parts[2] == "set":
+        if section == "validity" and len(parts) > 2 and parts[2] == "set":
             admin_steps[uid] = {"action": "set_validity", "target": int(parts[3])}
             return bot.send_message(callback.message.chat.id, "Send number of days:")
 
-        if section == "validity" and parts[2] == "remove":
+        if section == "validity" and len(parts) > 2 and parts[2] == "remove":
             target = int(parts[3])
             db.remove_validity(target)
             return bot.send_message(callback.message.chat.id, f"✔ Removed validity for {target}")
@@ -175,6 +186,14 @@ def register_admin_handlers(bot: telebot.TeleBot, db):
                 days = int(msg.text)
                 db.set_validity(target, days)
                 return bot.send_message(msg.chat.id, f"✔ Validity set for {target}")
+
+            # ✅ NEW: save global default voice id
+            if action == "set_default_voice":
+                voice_id = (msg.text or "").strip()
+                if len(voice_id) < 10:
+                    return bot.send_message(msg.chat.id, "❌ Invalid Voice ID")
+                db.set_setting("default_voice_id", voice_id)
+                return bot.send_message(msg.chat.id, f"✅ Default voice updated:\n{voice_id}")
 
             # ✅ FIXED BROADCAST (rate limit + report)
             if action == "broadcast":
